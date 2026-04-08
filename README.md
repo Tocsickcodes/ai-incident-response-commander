@@ -9,7 +9,6 @@ python_version: "3.10"
 app_file: ui/app.py
 pinned: false
 ---
-
 # 🚨 AI Incident Response Commander
 
 An OpenEnv-compliant environment where an AI agent responds to production incidents — investigating logs and metrics, identifying root causes, and applying fixes.
