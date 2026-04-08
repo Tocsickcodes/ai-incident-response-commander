@@ -3,7 +3,7 @@ import uuid
 from typing import Optional
 
 from .scenarios import SCENARIOS
-from .models import Action, Observation, State, StepResult, VALID_ACTIONS
+from models import Action, Observation, State, StepResult, VALID_ACTIONS
 
 
 class Environment:
