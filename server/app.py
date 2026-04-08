@@ -1,4 +1,5 @@
-from inference import main
+def main():
+    print("Server is running")
 
-def app():
-    return main()
+if __name__ == "__main__":
+    main()
