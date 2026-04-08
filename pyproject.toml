@@ -1,0 +1,13 @@
+[project]
+name = "ai-incident-response-commander"
+version = "0.1.0"
+description = "AI agent for incident response simulation"
+authors = [{ name = "Nirwahan" }]
+dependencies = [
+    "flask",
+    "gradio"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
