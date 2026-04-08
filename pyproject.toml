@@ -3,10 +3,15 @@ name = "ai-incident-response-commander"
 version = "0.1.0"
 description = "AI agent for incident response simulation"
 authors = [{ name = "Nirwahan" }]
+
 dependencies = [
     "flask",
-    "gradio"
+    "gradio",
+    "openenv-core>=0.2.0"
 ]
+
+[project.scripts]
+server = "server.app:app"
 
 [build-system]
 requires = ["setuptools"]
