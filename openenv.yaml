@@ -1,0 +1,258 @@
+# openenv.yaml
+# OpenEnv environment specification
+# See: https://github.com/meta-pytorch/OpenEnv
+
+name: ai-incident-response-commander
+version: "1.0.0"
+description: >
+  A production incident response environment where an AI agent receives alerts,
+  investigates logs and metrics, identifies root causes, and applies fixes.
+  Implements partial observability — the agent starts with only alert data
+  and must actively retrieve logs and metrics before deciding on a fix.
+
+author: AI Incident Response Team
+license: MIT
+
+# ── Environment metadata ──────────────────────────────────────────────────────
+
+environment:
+  type: incident-response
+  domain: site-reliability-engineering
+  real_world_task: true        # Not a game or toy — simulates real SRE work
+  partial_observability: true  # Agent starts with limited information
+
+# ── Tasks (scenarios) — minimum 3 required ───────────────────────────────────
+
+tasks:
+  - id: memory_leak
+    name: Memory Leak
+    description: >
+      Service memory usage at 94%. OOMKiller triggered. Agent must
+      inspect logs to find OutOfMemoryError, confirm via metrics,
+      then restart the service.
+    correct_action: restart_service
+    difficulty: easy
+    max_steps: 10
+
+  - id: bad_deployment
+    name: Bad Deployment
+    description: >
+      Error rate spiked to 32% after a recent deployment. Agent must
+      inspect logs to find NullPointerException, check metrics to
+      confirm recent deploy, then rollback the deployment.
+    correct_action: rollback_deployment
+    difficulty: medium
+    max_steps: 10
+
+  - id: network_issue
+    name: Network Issue
+    description: >
+      Inter-service timeout rate >40%. Packet loss on subnet detected.
+      Service itself is healthy (41% memory, 29% CPU). Agent must
+      recognise the external network cause and escalate.
+    correct_action: escalate
+    difficulty: hard
+    max_steps: 10
+
+# ── Action space ──────────────────────────────────────────────────────────────
+
+action_space:
+  type: discrete
+  actions:
+    - id: inspect_logs
+      description: Retrieve service logs to investigate errors
+      category: investigation
+
+    - id: check_metrics
+      description: Retrieve service metrics (CPU, memory, error rate, latency)
+      category: investigation
+
+    - id: restart_service
+      description: Restart the affected service to clear memory/state issues
+      category: remediation
+
+    - id: rollback_deployment
+      description: Revert the most recent deployment to the previous version
+      category: remediation
+
+    - id: escalate
+      description: Escalate to the network/infrastructure team for external issues
+      category: remediation
+
+# ── Observation space ─────────────────────────────────────────────────────────
+
+observation_space:
+  type: structured
+  partial_observability: true
+  fields:
+    alerts:
+      type: string
+      always_visible: true
+      description: Alert messages triggering the incident response
+
+    logs:
+      type: string
+      nullable: true
+      visible_after: inspect_logs
+      description: Service log output — null until inspect_logs is called
+
+    metrics:
+      type: object
+      nullable: true
+      visible_after: check_metrics
+      description: Service metrics dict — null until check_metrics is called
+      keys:
+        - memory_usage_pct
+        - cpu_usage_pct
+        - error_rate_pct
+        - latency_p99_ms
+        - recent_deployments
+        - gc_pause_count       # present in memory_leak
+        - packet_loss_pct      # present in network_issue
+
+    message:
+      type: string
+      description: Human-readable result of the last action
+
+    done:
+      type: boolean
+      description: Whether the episode has ended
+
+    reward:
+      type: float
+      description: Reward received for the last action
+
+# ── Reward function ───────────────────────────────────────────────────────────
+
+reward_function:
+  description: >
+    Partial progress signals at each step — not just final outcome.
+    Penalises wasted steps and rewards efficient, correct investigation.
+  signals:
+    - event: correct_fix
+      reward: +100
+      description: Applied the correct remediation action
+
+    - event: root_cause_identified
+      reward: +50
+      description: Investigated before fixing (logs or metrics checked)
+
+    - event: time_penalty
+      reward: -2
+      description: Applied every step to encourage efficiency
+
+    - event: unnecessary_action
+      reward: -10
+      description: Repeated an already-completed investigation action
+
+    - event: wrong_fix
+      reward: -30
+      description: Applied the wrong remediation action
+
+  score_range:
+    min: -42      # worst case: investigate nothing, wrong fix (3 steps)
+    max: 148      # best case: inspect logs + metrics + correct fix (3 steps)
+    optimal: 144  # inspect_logs (-2) + check_metrics (-2) + correct_fix (+148)
+
+# ── Agent graders ─────────────────────────────────────────────────────────────
+
+graders:
+  - id: easy
+    scenario: memory_leak
+    score_range: [0.0, 1.0]
+    description: >
+      Unambiguous signal. OutOfMemoryError in logs + 94% memory in metrics.
+      Tests whether the agent picks the correct fix on a clear-cut case.
+    passing_score: 0.70
+
+  - id: medium
+    scenario: bad_deployment
+    score_range: [0.0, 1.0]
+    description: >
+      Requires checking BOTH logs and metrics to distinguish a bad deploy
+      from a pre-existing code bug. Tests thoroughness of investigation.
+    passing_score: 0.75
+
+  - id: hard
+    scenario: network_issue
+    score_range: [0.0, 1.0]
+    description: >
+      Deceptive scenario. High error rates look like a service problem but
+      the service is healthy. Packet loss reveals external network cause.
+      Tests ability to avoid trap actions (restart/rollback).
+    passing_score: 0.80
+
+# ── HTTP API (OpenEnv server spec) ────────────────────────────────────────────
+
+server:
+  framework: flask
+  host: "0.0.0.0"
+  port: 5000
+  endpoints:
+    - path: /reset
+      method: POST
+      description: Initialize new episode, returns initial observation
+      response_code: 200
+
+    - path: /run
+      method: GET
+      description: Run one full episode with rule-based agent, returns result
+      response_code: 200
+
+    - path: /state
+      method: GET
+      description: Return current episode metadata (step count, history, etc.)
+      response_code: 200
+
+    - path: /health
+      method: GET
+      description: Liveness check for Docker HEALTHCHECK
+      response_code: 200
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+
+docker:
+  base_image: python:3.11-slim
+  expose_port: 5000
+  healthcheck: "curl -f http://localhost:5000/health || exit 1"
+  entrypoint: "python ui/app.py"
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+
+dependencies:
+  python: ">=3.10"
+  packages:
+    - flask>=3.0.0
+    - openai>=1.0.0
+    - groq>=0.9.0
+
+# ── Baseline scores (reproducible, seed=42) ───────────────────────────────────
+
+baselines:
+  - agent: rule_based
+    easy:    1.000
+    medium:  1.000
+    hard:    1.000
+    overall: 1.000
+    grade: S
+
+  - agent: random
+    easy:    0.900
+    medium:  0.000
+    hard:    0.800
+    overall: 0.540
+    grade: C
+
+  - agent: always_escalate
+    easy:    0.000
+    medium:  0.000
+    hard:    1.000
+    overall: 0.450
+    grade: C
+
+  - agent: always_restart
+    easy:    1.000
+    medium:  0.000
+    hard:    0.000
+    overall: 0.200
+    grade: F
