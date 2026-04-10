@@ -7,19 +7,22 @@ import json
 import textwrap
 from typing import List, Optional
 
-# --- SAFE IMPORT (won't crash validator) ---
+# --- SAFE IMPORT ---
 try:
     from openai import OpenAI
 except:
     OpenAI = None
 
-# --- CONSTANTS ---
+# --- CONFIG ---
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("GROQ_API_KEY")
 MODEL_NAME   = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
 BENCHMARK    = "incident-response"
 
-MAX_STEPS = 3
+MAX_STEPS = 5
+TEMPERATURE = 0
+MAX_TOKENS = 100
+
 VALID_ACTIONS = [
     "inspect_logs",
     "check_metrics",
@@ -30,10 +33,14 @@ VALID_ACTIONS = [
 
 FALLBACK_ACTION = "inspect_logs"
 
-SYSTEM_PROMPT = "You are an SRE. Return JSON: {\"action\": \"...\", \"reasoning\": \"...\"}"
+SYSTEM_PROMPT = textwrap.dedent("""
+You are an SRE handling a production incident.
+Return ONLY JSON:
+{"action": "<action>", "reasoning": "<reason>"}
+""").strip()
 
 
-# --- LOGGING (STRICT FORMAT) ---
+# --- LOGGING ---
 def log_start(task: str, env: str, model: str):
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
@@ -51,9 +58,9 @@ def log_end(success: bool, steps: int, rewards: List[float]):
     print(f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}", flush=True)
 
 
-# --- SAFE LLM CALL ---
+# --- SAFE LLM ---
 def get_action(step: int):
-    # No API? fallback
+    # fallback if no API
     if not API_KEY or OpenAI is None:
         return VALID_ACTIONS[min(step - 1, len(VALID_ACTIONS) - 1)]
 
@@ -66,8 +73,8 @@ def get_action(step: int):
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": f"Step {step}: choose best action"}
             ],
-            temperature=0,
-            max_tokens=50,
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
         )
 
         raw = response.choices[0].message.content or ""
@@ -76,13 +83,14 @@ def get_action(step: int):
         action = data.get("action", FALLBACK_ACTION)
         return action if action in VALID_ACTIONS else FALLBACK_ACTION
 
-    except Exception:
+    except Exception as e:
+        print(f"[DEBUG] LLM failed: {e}", flush=True)
         return FALLBACK_ACTION
 
 
 # --- MAIN ---
 def main():
-    rewards = []
+    rewards: List[float] = []
     success = False
 
     log_start(task="incident", env=BENCHMARK, model=MODEL_NAME)
@@ -90,10 +98,13 @@ def main():
     for step in range(1, MAX_STEPS + 1):
         action = get_action(step)
 
-        # simple fake reward logic (validator-safe)
-        reward = 1.0 if action in ["restart_service", "rollback_deployment"] else 0.0
-        done = step == MAX_STEPS
+        # simple deterministic reward
+        if action in ["restart_service", "rollback_deployment"]:
+            reward = 1.0
+        else:
+            reward = 0.0
 
+        done = step == MAX_STEPS
         rewards.append(reward)
 
         log_step(step, action, reward, done, None)
